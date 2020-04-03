@@ -95,15 +95,13 @@ EventType.names = {e.identifier: e.name for e in event_type_enum_items}
 
 
 def intersect_aabb(min1, max1, min2, max2):
-    """from isect_aabb_aabb_v3()
-    """
     for i in range(len(min1)):
         if (max1[i] < min2[i]) or (max2[i] < min1[i]):
             return False
     return True
 
 
-def region_window_rectangle(area):
+def get_window_region_rect(area):
     rect = [99999, 99999, 0, 0]
     for region in area.regions:
         if region.type == 'WINDOW':
@@ -113,6 +111,8 @@ def region_window_rectangle(area):
             rect[3] = max(region.y + region.height - 1, rect[3])
     return rect
 
+
+## from here
 
 def region_rectangle_v3d(context, area=None, region=None):
     """
@@ -141,7 +141,7 @@ def region_rectangle_v3d(context, area=None, region=None):
             elif ar.type == 'UI':
                 ui = ar
 
-    xmin, _, xmax, _ = region_window_rectangle(area)
+    xmin, _, xmax, _ = get_window_region_rect(area)
     sys_pref = compat.get_user_preferences(context).system
     if sys_pref.use_region_overlap:
         left_widht = right_widht = 0
@@ -443,7 +443,7 @@ class ScreencastKeysStatus(bpy.types.Operator):
         region = context.region
         area = context.area
         if region.type == 'WINDOW':
-            r_xmin, r_ymin, r_xmax, r_ymax = region_window_rectangle(area)
+            r_xmin, r_ymin, r_xmax, r_ymax = get_window_region_rect(area)
         else:
             r_xmin, r_ymin, r_xmax, r_ymax = (
                 region.x,
