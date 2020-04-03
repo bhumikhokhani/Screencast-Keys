@@ -40,33 +40,48 @@ else:
 
 
 def draw_rounded_box(x, y, w, h, round_radius):
+
+    # Get number of verticies for circle optimized for drawing.
     def circle_verts_num(r):
-        """描画に最適な？円の頂点数を求める"""
-        n = 32
+        num_verts = 32
         threshold = 2.0  # pixcel
         while True:
-            if r * 2 * math.pi / n > threshold:
-                return n
-            n -= 4
-            if n < 1:
+            if r * 2 * math.pi / num_verts > threshold:
+                return num_verts
+            num_verts -= 4
+            if num_verts < 1:
                 return 1
 
-    num = circle_verts_num(round_radius)
-    n = int(num / 4) + 1
-    pi = math.pi
-    angle = pi * 2 / num
+    num_verts = circle_verts_num(round_radius)
+    n = int(num_verts / 4) + 1
+    dangle = math.pi * 2 / num_verts
+
+    x_origin = [
+        x + round_radius,
+        x + w - round_radius,
+        x + w - round_radius,
+        x + round_radius,
+    ]
+    y_origin = [
+        y + round_radius,
+        y + round_radius,
+        y + h - round_radius,
+        y + h - round_radius,
+    ]
+    angle_start = [
+        math.pi * 1.0,
+        math.pi * 1.5,
+        math.pi * 0.0,
+        math.pi * 0.5,
+    ]
+
     bgl.glBegin(bgl.GL_LINE_LOOP)
-    for x0, y0, a in ((x + round_radius, y + round_radius, pi),
-                      (x + w - round_radius, y + round_radius,
-                       pi * 1.5),
-                      (x + w - round_radius, y + h - round_radius, 0.0),
-                      (x + round_radius, y + h - round_radius,
-                       pi * 0.5)):
-        for i in range(n):
-            xco = x0 + round_radius * math.cos(a)
-            yco = y0 + round_radius * math.sin(a)
-            bgl.glVertex2f(xco, yco)
-            a += angle
+    for x0, y0, angle in zip(x_origin, y_origin, angle_start):
+        for _ in range(n):
+            x = x0 + round_radius * math.cos(angle)
+            y = y0 + round_radius * math.sin(angle)
+            bgl.glVertex2f(x, y)
+            angle += dangle
     bgl.glEnd()
 
 
@@ -74,8 +89,8 @@ event_type_enum_items = bpy.types.Event.bl_rna.properties['type'].enum_items
 
 EventType = enum.IntEnum(
     'EventType',
-    [(e.identifier, e.value) for e in event_type_enum_items])
-
+    [(e.identifier, e.value) for e in event_type_enum_items]
+)
 EventType.names = {e.identifier: e.name for e in event_type_enum_items}
 
 
@@ -83,7 +98,7 @@ def intersect_aabb(min1, max1, min2, max2):
     """from isect_aabb_aabb_v3()
     """
     for i in range(len(min1)):
-        if max1[i] < min2[i] or max2[i] < min1[i]:
+        if (max1[i] < min2[i]) or (max2[i] < min1[i]):
             return False
     return True
 

@@ -32,7 +32,7 @@ from .utils import compatibility as compat
 
 @BlClassRegistry()
 class ScreencastKeys_OT_CheckAddonUpdate(bpy.types.Operator):
-    bl_idname = "uv.muv_check_addon_update"
+    bl_idname = "wm.screencast_keys_check_addon_update"
     bl_label = "Check Update"
     bl_description = "Check Add-on Update"
     bl_options = {'REGISTER', 'UNDO'}
@@ -47,7 +47,7 @@ class ScreencastKeys_OT_CheckAddonUpdate(bpy.types.Operator):
 @BlClassRegistry()
 @compat.make_annotations
 class ScreencastKeys_OT_UpdateAddon(bpy.types.Operator):
-    bl_idname = "uv.muv_update_addon"
+    bl_idname = "wm.screencast_keys_update_addon"
     bl_label = "Update"
     bl_description = "Update Add-on"
     bl_options = {'REGISTER', 'UNDO'}
@@ -102,9 +102,11 @@ class ScreenCastKeysPreferences(bpy.types.AddonPreferences):
     )
     origin = bpy.props.EnumProperty(
         name='Origin',
-        items=[('REGION', 'Region', "Region.type is 'WINDOW'"),
-               ('AREA', 'Area', ''),
-               ('WINDOW', 'Window', '')],
+        items=[
+            ('REGION', 'Region', "Region.type is 'WINDOW'"),
+            ('AREA', 'Area', ''),
+            ('WINDOW', 'Window', '')
+        ],
         default='REGION',
     )
     offset = bpy.props.IntVectorProperty(
