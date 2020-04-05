@@ -94,6 +94,7 @@ EventType = enum.IntEnum(
 EventType.names = {e.identifier: e.name for e in event_type_enum_items}
 
 
+# Check intersection using AABB method.
 def intersect_aabb(min1, max1, min2, max2):
     for i in range(len(min1)):
         if (max1[i] < min2[i]) or (max2[i] < min1[i]):
@@ -101,6 +102,7 @@ def intersect_aabb(min1, max1, min2, max2):
     return True
 
 
+# Return 'WINDOW' region rectangle.
 def get_window_region_rect(area):
     rect = [99999, 99999, 0, 0]
     for region in area.regions:
@@ -112,72 +114,80 @@ def get_window_region_rect(area):
     return rect
 
 
-## from here
-
-def region_rectangle_v3d(context, area=None, region=None):
-    """
-    for Region Overlap
-    return window coordinates (xmin, ymin, xmax, ymax)
-    """
+# On VIEW_3D, we need to handle region overlap.
+# This function takes into accout this, and return rectangle.
+def get_region_rect_on_v3d(context, area=None, region=None):
     if not area:
         area = context.area
     if not region:
         region = context.region
 
+    # We don't need to handle non-'WINDOW' region which is not effected by
+    # region overlap. So we can return region rectangle as it is.
     if region.type != 'WINDOW':
-        return (region.x, region.y,
-                region.x + region.width, region.y + region.height)
+        return [region.x, region.y,
+                region.x + region.width, region.y + region.height]
 
-    window = tools = tool_props = ui = None
+    # From here, we handle 'WINDOW' region with considering region overlap.
+    window = region
+    tools = ui = None
     for ar in area.regions:
+        # We need to dicard regions whose width is 1.
         if ar.width > 1:
             if ar.type == 'WINDOW':
-                if ar == region:
-                    region = ar
+                if ar == window:
+                    window = ar
             elif ar.type == 'TOOLS':
                 tools = ar
-            elif ar.type == 'TOOL_PROPS':
-                tool_props = ar
             elif ar.type == 'UI':
                 ui = ar
 
     xmin, _, xmax, _ = get_window_region_rect(area)
     sys_pref = compat.get_user_preferences(context).system
     if sys_pref.use_region_overlap:
-        left_widht = right_widht = 0
+        left_width = right_width = 0
+
         if tools and ui:
             r1, r2 = sorted([tools, ui], key=lambda ar: ar.x)
             if r1.x == area.x:
-                # 両方左
+                # 'TOOLS' and 'UI' are located on left side.
                 if r2.x == r1.x + r1.width:
-                    left_widht = r1.width + r2.width
-                # 片方ずつ
+                    left_width = r1.width + r2.width
+                # 'TOOLS' and 'UI' are located on each side.
                 else:
-                    left_widht = r1.width
-                    right_widht = r2.width
-            # 両方右
+                    left_width = r1.width
+                    right_width = r2.width
+            # 'TOOLS' and 'UI' are located on right side.
             else:
-                right_widht = r1.width + r2.width
+                right_width = r1.width + r2.width
 
         elif tools:
+            # 'TOOLS' is located on left side.
             if tools.x == area.x:
-                left_widht = tools.width
+                left_width = tools.width
+            # 'TOOLS' is located on right side.
             else:
-                right_widht = tools.width
+                right_width = tools.width
 
         elif ui:
+            # 'UI' is located on left side.
             if ui.x == area.x:
-                left_widht = ui.width
+                left_width = ui.width
+            # 'TOOLS' is located on right side.
             else:
-                right_widht = ui.width
+                right_width = ui.width
 
-        xmin = max(xmin, area.x + left_widht)
-        xmax = min(xmax, area.x + area.width - right_widht - 1)
+        # Clip 'UI' and 'TOOLS' region from 'WINDOW' region, which enables us
+        # to show only 'WINDOW' region.
+        xmin = max(xmin, area.x + left_width)
+        xmax = min(xmax, area.x + area.width - right_width - 1)
 
-    ymin = region.y
-    ymax = region.y + region.height - 1
+    ymin = window.y
+    ymax = window.y + window.height - 1
+
     return xmin, ymin, xmax, ymax
 
+## from here
 
 @BlClassRegistry()
 class ScreencastKeysStatus(bpy.types.Operator):
@@ -186,14 +196,16 @@ class ScreencastKeysStatus(bpy.types.Operator):
     bl_description = 'Display keys pressed'
     bl_options = {'REGISTER'}
 
-
     # hold modifier keys
     hold_modifier_keys = []
+    # Event history.
+    # Format: [time, event_type, modifier, repeat]
+    event_history = []
+    # Operator history.
+    # Format: [time, bl_label, idname_py, addr]
+    operator_history = []
 
-    event_log = []  # [[time, event_type, mod, repeat], ...]
-    operator_log = []  # [[time, bl_label, idname_py, addr], ...]
-
-    modifier_event_types = [
+    MODIFIER_EVENT_TYPES = [
         EventType.LEFT_SHIFT,
         EventType.RIGHT_SHIFT,
         EventType.LEFT_CTRL,
@@ -203,35 +215,56 @@ class ScreencastKeysStatus(bpy.types.Operator):
         EventType.OSKEY
     ]
 
-    mouse_event_types = {
-        EventType.LEFTMOUSE,  # Left Mouse
-        EventType.MIDDLEMOUSE,  # Middle Mouse
-        EventType.RIGHTMOUSE,  # Right Mouse
-        EventType.BUTTON4MOUSE,  # Button4 Mouse
-        EventType.BUTTON5MOUSE,  # Button5 Mouse
-        EventType.BUTTON6MOUSE,  # Button6 Mouse
-        EventType.BUTTON7MOUSE,  # Button7 Mouse
-        EventType.TRACKPADPAN,  # Mouse/Trackpad Pan
-        EventType.TRACKPADZOOM,  # Mouse/Trackpad Zoom
-        EventType.MOUSEROTATE,  # Mouse/Trackpad Rotate
-        EventType.WHEELUPMOUSE,  # Wheel Up
-        EventType.WHEELDOWNMOUSE,  # Wheel Down
-        EventType.WHEELINMOUSE,  # Wheel In
-        EventType.WHEELOUTMOUSE,  # Wheel Out
+    MOUSE_EVENT_TYPES = {
+        EventType.LEFTMOUSE,
+        EventType.MIDDLEMOUSE,
+        EventType.RIGHTMOUSE,
+        EventType.BUTTON4MOUSE,
+        EventType.BUTTON5MOUSE,
+        EventType.BUTTON6MOUSE,
+        EventType.BUTTON7MOUSE,
+        EventType.TRACKPADPAN,
+        EventType.TRACKPADZOOM,
+        EventType.MOUSEROTATE,
+        EventType.WHEELUPMOUSE,
+        EventType.WHEELDOWNMOUSE,
+        EventType.WHEELINMOUSE,
+        EventType.WHEELOUTMOUSE,
     }
 
-    space_types = compat.get_all_space_types()
+    SPACE_TYPES = compat.get_all_space_types()
 
-    SEPARATOR_HEIGHT = 0.6  # フォント高の倍率
+    # Height ratio against font for separator.
+    HEIGHT_RATIO_FOR_SEPARATOR = 0.6
 
+    # Interval for 'TIMER' event (redraw).
     TIMER_STEP = 0.1
+
+    # Previous redraw time.
     prev_time = 0.0
-    timers = {}  # {Window.as_pointer(): Timer, ...}
 
-    handlers = {}  # {(Space, region_type): handle, ...}
+    # Timer handlers.
+    # Format: {Window.as_pointer(): Timer}
+    timers = {}
 
-    draw_regions_prev = set()  # {region.as_pointer(), ...}
-    origin = {'window': '', 'area': '', 'space': '', 'region_type': ''}
+    # Draw handlers.
+    # Format: {(Space, Region.type): handle}
+    handlers = {}
+
+    # Regions which are drawing in previous redraw.
+    # Format: {Region.as_pointer()}
+    draw_regions_prev = set()
+
+# from here
+
+    # Draw target.
+    origin = {
+        "window": "",       # Window.as_pointer()
+        "area": "",         # Area.as_pointer()
+        "space": "",        # Space.as_pointer()
+        "region_type": "",  # Region.type
+    }
+
     # {area_addr: [space_addr, ...], ...}
     area_spaces = collections.defaultdict(set)
 
@@ -242,8 +275,8 @@ class ScreencastKeysStatus(bpy.types.Operator):
         """modifierを並び替えて重複を除去した名前を返す"""
 
         def sort_func(et):
-            if et in cls.modifier_event_types:
-                return cls.modifier_event_types.index(et)
+            if et in cls.MODIFIER_EVENT_TYPES:
+                return cls.MODIFIER_EVENT_TYPES.index(et)
             else:
                 return 100
 
@@ -251,28 +284,28 @@ class ScreencastKeysStatus(bpy.types.Operator):
         names = []
         for mod in modifiers:
             name = mod.names[mod.name]
-            if mod in cls.modifier_event_types:
+            if mod in cls.MODIFIER_EVENT_TYPES:
                 name = re.sub('(Left |Right )', '', name)
             if name not in names:
                 names.append(name)
         return names
 
     @classmethod
-    def removed_old_event_log(cls):
+    def removed_old_event_history(cls):
         prefs = compat.get_user_preferences(bpy.context).addons["screencastkeys"].preferences
         """:type: ScreenCastKeysPreferences"""
         current_time = time.time()
-        event_log = []
-        for item in cls.event_log:
+        event_history = []
+        for item in cls.event_history:
             event_time = item[0]
             t = current_time - event_time
             if t <= prefs.display_time:
-                event_log.append(item)
-        return event_log
+                event_history.append(item)
+        return event_history
 
     @classmethod
-    def removed_old_operator_log(cls):
-        return cls.operator_log[-32:]
+    def removed_old_operator_history(cls):
+        return cls.operator_history[-32:]
 
     @classmethod
     def get_origin(cls, context):
@@ -312,7 +345,7 @@ class ScreencastKeysStatus(bpy.types.Operator):
                     for region in area.regions:
                         if region.type == cls.origin['region_type']:
                             if area.type == 'VIEW_3D':
-                                rect = region_rectangle_v3d(context, area,
+                                rect = get_region_rect_on_v3d(context, area,
                                                             region)
                                 x += rect[0]
                                 y += rect[1]
@@ -345,9 +378,9 @@ class ScreencastKeysStatus(bpy.types.Operator):
         w = h = 0
 
         if prefs.show_last_operator:
-            operator_log = cls.removed_old_operator_log()
-            if operator_log:
-                t, name, idname_py, addr = operator_log[-1]
+            operator_history = cls.removed_old_operator_history()
+            if operator_history:
+                t, name, idname_py, addr = operator_history[-1]
                 text = bpy.app.translations.pgettext(name, 'Operator')
                 text += " ('{}')".format(idname_py)
                 tw = blf.dimensions(font_id, text)[0]
@@ -361,14 +394,14 @@ class ScreencastKeysStatus(bpy.types.Operator):
             w = max(w, tw)
             h += th
 
-        event_log = cls.removed_old_event_log()
+        event_history = cls.removed_old_event_history()
 
-        if cls.hold_modifier_keys or event_log:
+        if cls.hold_modifier_keys or event_history:
             tw = blf.dimensions(font_id, 'Left Mouse')[0]
             w = max(w, tw)
             h += th * cls.SEPARATOR_HEIGHT
 
-        for event_time, event_type, modifiers, count in event_log[::-1]:
+        for event_time, event_type, modifiers, count in event_history[::-1]:
             text = event_type.names[event_type.name]
             if modifiers:
                 mod_names = cls.sorted_modifiers(modifiers)
@@ -499,16 +532,16 @@ class ScreencastKeysStatus(bpy.types.Operator):
         glscissorbox = bgl.Buffer(bgl.GL_INT, 4)
         bgl.glGetIntegerv(bgl.GL_SCISSOR_BOX, glscissorbox)
         if context.area.type == 'VIEW_3D' and region.type == 'WINDOW':
-            xmin, ymin, xmax, ymax = region_rectangle_v3d(context)
+            xmin, ymin, xmax, ymax = get_region_rect_on_v3d(context)
             bgl.glScissor(xmin, ymin, xmax - xmin + 1, ymax - ymin + 1)
 
         th = blf.dimensions(0, string.printable)[1]
         px = x - region.x
         py = y - region.y
 
-        operator_log = cls.removed_old_operator_log()
-        if prefs.show_last_operator and operator_log:
-            t, name, idname_py, addr = operator_log[-1]
+        operator_history = cls.removed_old_operator_history()
+        if prefs.show_last_operator and operator_history:
+            t, name, idname_py, addr = operator_history[-1]
             if current_time - t <= prefs.display_time:
                 color = prefs.color
                 compat.set_blf_font_color(font_id, *color, 1.0)
@@ -551,11 +584,11 @@ class ScreencastKeysStatus(bpy.types.Operator):
             draw_any = True
         py += th + margin * 2
 
-        event_log = cls.removed_old_event_log()
+        event_history = cls.removed_old_event_history()
 
         py += th * cls.SEPARATOR_HEIGHT
 
-        for event_time, event_type, modifiers, count in event_log[::-1]:
+        for event_time, event_type, modifiers, count in event_history[::-1]:
             color = prefs.color
             compat.set_blf_font_color(font_id, *color, 1.0)
 
@@ -605,7 +638,7 @@ class ScreencastKeysStatus(bpy.types.Operator):
             return True
         elif (prefs is not None
               and not prefs.show_mouse_events
-              and event_type in self.mouse_event_types):
+              and event_type in self.MOUSE_EVENT_TYPES):
             return True
         elif event_type.name.startswith('EVT_TWEAK'):
             return True
@@ -614,7 +647,7 @@ class ScreencastKeysStatus(bpy.types.Operator):
 
     def is_modifier_event(self, event):
         event_type = EventType[event.type]
-        return event_type in self.modifier_event_types
+        return event_type in self.MODIFIER_EVENT_TYPES
 
     def modal(self, context, event):
         prefs = compat.get_user_preferences(bpy.context).addons["screencastkeys"].preferences
@@ -641,25 +674,25 @@ class ScreencastKeysStatus(bpy.types.Operator):
         if event_type in current_mod:
             current_mod.remove(event_type)
 
-        # event_log
+        # event_history
         if (not self.is_ignore_event(event, prefs=prefs) and
                 not self.is_modifier_event(event) and event.value == 'PRESS'):
-            last = self.event_log[-1] if self.event_log else None
+            last = self.event_history[-1] if self.event_history else None
             current = [current_time, event_type, current_mod, 1]
             if (last and last[1:-1] == current[1:-1] and
                     current_time - last[0] < prefs.display_time):
                 last[0] = current_time
                 last[-1] += 1
             else:
-                self.event_log.append(current)
-        self.event_log[:] = self.removed_old_event_log()
+                self.event_history.append(current)
+        self.event_history[:] = self.removed_old_event_history()
 
-        # operator_log
+        # operator_history
         operators = list(context.window_manager.operators)
 
         if operators:
-            if self.operator_log:
-                addr = self.operator_log[-1][-1]
+            if self.operator_history:
+                addr = self.operator_history[-1][-1]
             else:
                 addr = None
             j = 0
@@ -671,9 +704,9 @@ class ScreencastKeysStatus(bpy.types.Operator):
             for op in operators[j:]:
                 m, f = op.bl_idname.split('_OT_')
                 idname_py = m.lower() + '.' + f
-                self.operator_log.append(
+                self.operator_history.append(
                     [current_time, op.bl_label, idname_py, op.as_pointer()])
-        self.operator_log[:] = self.removed_old_operator_log()
+        self.operator_history[:] = self.removed_old_operator_history()
 
         # redraw
         prev_time = self.prev_time
@@ -692,7 +725,7 @@ class ScreencastKeysStatus(bpy.types.Operator):
 
             # 再描画
             for area, region in regions:
-                space_type = self.space_types[area.type]
+                space_type = self.SPACE_TYPES[area.type]
                 h_key = (space_type, region.type)
                 if h_key not in self.handlers:
                     self.handlers[h_key] = space_type.draw_handler_add(
@@ -734,8 +767,8 @@ class ScreencastKeysStatus(bpy.types.Operator):
             self.event_timer_remove(context)
             self.draw_handler_remove()
             self.hold_modifier_keys.clear()
-            self.event_log.clear()
-            self.operator_log.clear()
+            self.event_history.clear()
+            self.operator_history.clear()
             self.draw_regions_prev.clear()
             context.area.tag_redraw()
             cls.running = False
@@ -774,7 +807,7 @@ class ScreencastKeysStatusSetOrigin(bpy.types.Operator):
 
     def draw_handler_add(self, context):
         for area in context.screen.areas:
-            space_type = ScreencastKeysStatus.space_types[area.type]
+            space_type = ScreencastKeysStatus.SPACE_TYPES[area.type]
             for region in area.regions:
                 # TODO: region.id is not available in Blender 2.8
                 if region.type != "":
