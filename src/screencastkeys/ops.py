@@ -41,8 +41,9 @@ else:
 
 def draw_rounded_box(x, y, w, h, round_radius):
 
-    # Get number of verticies for circle optimized for drawing.
     def circle_verts_num(r):
+        """Get number of verticies for circle optimized for drawing."""
+
         num_verts = 32
         threshold = 2.0  # pixcel
         while True:
@@ -86,7 +87,6 @@ def draw_rounded_box(x, y, w, h, round_radius):
 
 
 event_type_enum_items = bpy.types.Event.bl_rna.properties['type'].enum_items
-
 EventType = enum.IntEnum(
     'EventType',
     [(e.identifier, e.value) for e in event_type_enum_items]
@@ -94,16 +94,19 @@ EventType = enum.IntEnum(
 EventType.names = {e.identifier: e.name for e in event_type_enum_items}
 
 
-# Check intersection using AABB method.
 def intersect_aabb(min1, max1, min2, max2):
+    """Check intersection using AABB method."""
+
     for i in range(len(min1)):
         if (max1[i] < min2[i]) or (max2[i] < min1[i]):
             return False
+
     return True
 
 
-# Return 'WINDOW' region rectangle.
 def get_window_region_rect(area):
+    """Return 'WINDOW' region rectangle."""
+
     rect = [99999, 99999, 0, 0]
     for region in area.regions:
         if region.type == 'WINDOW':
@@ -111,12 +114,15 @@ def get_window_region_rect(area):
             rect[1] = min(rect[1], region.y)
             rect[2] = max(region.x + region.width - 1, rect[2])
             rect[3] = max(region.y + region.height - 1, rect[3])
+
     return rect
 
 
-# On VIEW_3D, we need to handle region overlap.
-# This function takes into accout this, and return rectangle.
 def get_region_rect_on_v3d(context, area=None, region=None):
+    """On VIEW_3D, we need to handle region overlap.
+       This function takes into accout this, and return rectangle.
+    """
+
     if not area:
         area = context.area
     if not region:
@@ -255,8 +261,6 @@ class ScreencastKeysStatus(bpy.types.Operator):
     # Format: {Region.as_pointer()}
     draw_regions_prev = set()
 
-# from here
-
     # Draw target.
     origin = {
         "window": "",       # Window.as_pointer()
@@ -265,176 +269,238 @@ class ScreencastKeysStatus(bpy.types.Operator):
         "region_type": "",  # Region.type
     }
 
-    # {area_addr: [space_addr, ...], ...}
+    # Area - Space mapping.
+    # Format: {Area.as_pointer(), [Space.as_pointer(), ...]}
+    # TODO: Clear when this model is finished.
     area_spaces = collections.defaultdict(set)
 
+    # Check if this operator is running.
+    # TODO: We can check it with the valid of event handler.
     running = False
 
     @classmethod
-    def sorted_modifiers(cls, modifiers):
-        """modifierを並び替えて重複を除去した名前を返す"""
+    def sorted_modifier_keys(cls, modifiers):
+        """Sort and unique modifier keys."""
 
-        def sort_func(et):
-            if et in cls.MODIFIER_EVENT_TYPES:
-                return cls.MODIFIER_EVENT_TYPES.index(et)
+        def key_fn(event_type):
+            if event_type in cls.MODIFIER_EVENT_TYPES:
+                return cls.MODIFIER_EVENT_TYPES.index(event_type)
             else:
                 return 100
 
-        modifiers = sorted(modifiers, key=sort_func)
+        modifiers = sorted(modifiers, key=key_fn)
         names = []
         for mod in modifiers:
             name = mod.names[mod.name]
-            if mod in cls.MODIFIER_EVENT_TYPES:
-                name = re.sub('(Left |Right )', '', name)
+            assert mod in cls.MODIFIER_EVENT_TYPES, \
+                   "{} must be modifier types".format(name)
+
+            # Remove left and right identifier.
+            name = re.sub('(Left |Right )', '', name)
+
+            # Unique.
             if name not in names:
                 names.append(name)
+
         return names
 
     @classmethod
     def removed_old_event_history(cls):
+        """Return event history whose old events are removed."""
+
         prefs = compat.get_user_preferences(bpy.context).addons["screencastkeys"].preferences
-        """:type: ScreenCastKeysPreferences"""
         current_time = time.time()
+
         event_history = []
         for item in cls.event_history:
             event_time = item[0]
             t = current_time - event_time
             if t <= prefs.display_time:
                 event_history.append(item)
+
         return event_history
 
     @classmethod
     def removed_old_operator_history(cls):
+        """Return operator history whose old operators are removed."""
+        # TODO: Control number of history from Preferences.
+
         return cls.operator_history[-32:]
 
     @classmethod
     def get_origin(cls, context):
-        prefs = compat.get_user_preferences(bpy.context).addons["screencastkeys"].preferences
-        """:type: ScreenCastKeysPreferences"""
+        """Get draw target.
+           Retrun value: (Window, Area, Region, x, y)
+        """
 
-        def match(area):
-            # for area in context.screen.areas:
+        prefs = compat.get_user_preferences(bpy.context).addons["screencastkeys"].preferences
+
+        def is_window_match(window):
+            return window.as_pointer() == cls.origin['window']
+
+        def is_area_match(area):
             if area.as_pointer() == cls.origin['area']:
-                return True
+                return True     # Area is just same as user specified area.
             elif area.spaces.active.as_pointer() == cls.origin['space']:
-                return True
+                return True     # Area is not same, but active space information is same.
             else:
-                addr = area.as_pointer()
-                if addr in cls.area_spaces:
-                    addrs = {sp.as_pointer() for sp in area.spaces}
-                    if cls.origin['space'] in addrs:
+                area_p = area.as_pointer()
+                if area_p in cls.area_spaces:
+                    spaces_p = {s.as_pointer() for s in area_p.spaces}
+                    if cls.origin['space'] in spaces_p:
+                        # Exists in inactive space information.
                         return True
             return False
 
+        def is_region_match(area):
+            return region.type == cls.origin['region_type']
+
         x, y = prefs.offset
-        for win in context.window_manager.windows:
-            if win.as_pointer() == cls.origin['window']:
+        for window in context.window_manager.windows:
+            if is_window_match(window):
                 break
         else:
             return None, None, None, 0, 0
 
         if prefs.origin == 'WINDOW':
-            return win, None, None, x, y
+            return window, None, None, x, y
         elif prefs.origin == 'AREA':
-            for area in win.screen.areas:
-                if match(area):
-                    return win, area, None, x + area.x, y + area.y
+            for area in window.screen.areas:
+                if is_area_match(area):
+                    return window, area, None, x + area.x, y + area.y
         elif prefs.origin == 'REGION':
-            for area in win.screen.areas:
-                if match(area):
-                    for region in area.regions:
-                        if region.type == cls.origin['region_type']:
-                            if area.type == 'VIEW_3D':
-                                rect = get_region_rect_on_v3d(context, area,
-                                                            region)
-                                x += rect[0]
-                                y += rect[1]
-                            else:
-                                x += region.x
-                                y += region.y
-                            return win, area, region, x, y
+            for area in window.screen.areas:
+                if not is_area_match(area):
+                    continue
+                for region in area.regions:
+                    if is_region_match(region):
+                        if area.type == 'VIEW_3D':
+                            rect = get_region_rect_on_v3d(context, area, region)
+                            x += rect[0]
+                            y += rect[1]
+                        else:
+                            x += region.x
+                            y += region.y
+                        return window, area, region, x, y
+
         return None, None, None, 0, 0
 
     @classmethod
-    def calc_draw_rectangle(cls, context):
-        """(xmin, ymin, xmax, ymax)というwindow座標を返す。
-        該当する描画範囲がないならNoneを返す。
+    def calc_draw_area_rect(cls, context):
+        """Return draw area rectangle.
+
+        Draw format:
+
+            Overview:
+                ....
+                Event history[-3]
+                Event history[-2]
+                Event history[-1]
+
+                Hold modifier key list
+                ----------------
+                Operator history
+
+            Event history format:
+                With count: {key} x{count}
+                With modifier key: {modifier key} + {key}
+
+            Hold modifier key list format:
+                 --------------     --------------
+                |{modifier key}| + |{modifier key}|
+                 --------------     --------------
         """
 
+        # TODO: bpy.context -> context
         prefs = compat.get_user_preferences(bpy.context).addons["screencastkeys"].preferences
-        """:type: ScreenCastKeysPreferences"""
 
         font_size = prefs.font_size
-        font_id = 0
+        font_id = 0         # TODO: font_id should be constant.
         dpi = compat.get_user_preferences(context).system.dpi
         blf.size(font_id, font_size, dpi)
 
-        th = blf.dimensions(0, string.printable)[1]
+        # Get string height in draw area.
+        sh = blf.dimensions(font_id, string.printable)[1]
 
-        win, area, region, x, y = cls.get_origin(context)
-        if not win:
+        # Get draw target.
+        window, area, region, x, y = cls.get_origin(context)
+        if not window:
             return None
 
-        w = h = 0
+        # Calculate width/height of draw area.
+        draw_area_width = 0
+        draw_area_height = 0
 
         if prefs.show_last_operator:
             operator_history = cls.removed_old_operator_history()
             if operator_history:
-                t, name, idname_py, addr = operator_history[-1]
+                _, name, idname_py, _ = operator_history[-1]
                 text = bpy.app.translations.pgettext(name, 'Operator')
                 text += " ('{}')".format(idname_py)
-                tw = blf.dimensions(font_id, text)[0]
-                w = max(w, tw)
-            h += th + th * cls.SEPARATOR_HEIGHT
+
+                sw = blf.dimensions(font_id, text)[0]
+                draw_area_width = max(draw_area_width, sw)
+            draw_area_height += sh + sh * cls.SEPARATOR_HEIGHT
 
         if cls.hold_modifier_keys:
-            mod_names = cls.sorted_modifiers(cls.hold_modifier_keys)
+            mod_names = cls.sorted_modifier_keys(cls.hold_modifier_keys)
             text = ' + '.join(mod_names)
-            tw = blf.dimensions(font_id, text)[0]
-            w = max(w, tw)
-            h += th
+
+            sw = blf.dimensions(font_id, text)[0]
+            draw_area_width = max(draw_area_width, sw)
+            draw_area_height += sh
 
         event_history = cls.removed_old_event_history()
 
         if cls.hold_modifier_keys or event_history:
-            tw = blf.dimensions(font_id, 'Left Mouse')[0]
-            w = max(w, tw)
-            h += th * cls.SEPARATOR_HEIGHT
+            sw = blf.dimensions(font_id, 'Left Mouse')[0]
+            draw_area_width = max(draw_area_width, sw)
+            draw_area_height += sh * cls.SEPARATOR_HEIGHT
 
-        for event_time, event_type, modifiers, count in event_history[::-1]:
+        for _, event_type, modifiers, count in event_history[::-1]:
             text = event_type.names[event_type.name]
             if modifiers:
-                mod_names = cls.sorted_modifiers(modifiers)
+                mod_names = cls.sorted_modifier_keys(modifiers)
                 text = ' + '.join(mod_names) + ' + ' + text
             if count > 1:
                 text += ' x' + str(count)
 
-            w = max(w, blf.dimensions(font_id, text)[0])
-            h += th
+            sw = blf.dimensions(font_id, text)[0]
+            draw_area_width = max(draw_area_width, sw)
+            draw_area_height += sh
 
-        h += th
+        draw_area_height += sh
 
         if prefs.origin == 'WINDOW':
-            return x, y, x + w, y + h
-        else:
-            if prefs.origin == 'AREA':
-                xmin = area.x
-                ymin = area.y
-                xmax = area.x + area.width - 1
-                ymax = area.y + area.height - 1
-            else:
-                xmin = region.x
-                ymin = region.y
-                xmax = region.x + region.width - 1
-                ymax = region.y + region.height - 1
-            return (max(x, xmin), max(y, ymin),
-                    min(x + w, xmax), min(y + h, ymax))
+            return x, y, x + draw_area_width, y + draw_area_height
+        elif prefs.origin == 'AREA':
+            xmin = area.x
+            ymin = area.y
+            xmax = area.x + area.width - 1
+            ymax = area.y + area.height - 1
+            return (max(x, xmin),
+                    max(y, ymin),
+                    min(x + draw_area_width, xmax),
+                    min(y + draw_area_height, ymax))
+        elif prefs.origin == 'REGION':
+            xmin = region.x
+            ymin = region.y
+            xmax = region.x + region.width - 1
+            ymax = region.y + region.height - 1
+            return (max(x, xmin),
+                    max(y, ymin),
+                    min(x + draw_area_width, xmax),
+                    min(y + draw_area_height, ymax))
+        
+        assert False, "Value 'prefs.origin' is invalid (value={}).".format(prefs.origin)
+
+# from here.
 
     @classmethod
     def find_redraw_regions(cls, context):
         """[(area, region), ...]"""
 
-        rect = cls.calc_draw_rectangle(context)
+        rect = cls.calc_draw_area_rect(context)
         if not rect:
             return []
         x, y, xmax, ymax = rect
@@ -464,7 +530,7 @@ class ScreencastKeysStatus(bpy.types.Operator):
 
         if context.window.as_pointer() != cls.origin['window']:
             return
-        rect = cls.calc_draw_rectangle(context)
+        rect = cls.calc_draw_area_rect(context)
         if not rect:
             return
         xmin, ymin, xmax, ymax = rect
@@ -565,7 +631,7 @@ class ScreencastKeysStatus(bpy.types.Operator):
         margin = th * 0.2
         if cls.hold_modifier_keys or False:   # is_rendering
             col = prefs.color_shadow[:3] + (prefs.color_shadow[3] * 2,)
-            mod_names = cls.sorted_modifiers(cls.hold_modifier_keys)
+            mod_names = cls.sorted_modifier_keys(cls.hold_modifier_keys)
             if False:    # is_rendering
                 if 0:
                     text = '- - -'
@@ -594,7 +660,7 @@ class ScreencastKeysStatus(bpy.types.Operator):
 
             text = event_type.names[event_type.name]
             if modifiers:
-                mod_names = cls.sorted_modifiers(modifiers)
+                mod_names = cls.sorted_modifier_keys(modifiers)
                 text = ' + '.join(mod_names) + ' + ' + text
             if count > 1:
                 text += ' x' + str(count)
