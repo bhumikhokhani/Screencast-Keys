@@ -494,65 +494,81 @@ class ScreencastKeysStatus(bpy.types.Operator):
         
         assert False, "Value 'prefs.origin' is invalid (value={}).".format(prefs.origin)
 
-# from here.
 
     @classmethod
     def find_redraw_regions(cls, context):
-        """[(area, region), ...]"""
+        """Find regions to redraw."""
 
         rect = cls.calc_draw_area_rect(context)
         if not rect:
-            return []
-        x, y, xmax, ymax = rect
-        w = xmax - x
-        h = ymax - y
-        if w == h == 0:
-            return []
+            return []       # No draw target.
 
+        draw_area_min_x, draw_area_min_y, draw_area_max_x, draw_area_max_y = rect
+        width = draw_area_max_x - draw_area_min_x
+        height = draw_area_max_y - draw_area_min_y
+        if width == height == 0:
+            return []       # Zero size region.
+        
+        draw_area_min = [draw_area_min_x, draw_area_min_y]
+        draw_area_max = [draw_area_max_x - 1, draw_area_max_y - 1]
+
+        # Collect regions which overlaps with draw area.
         regions = []
         for area in context.screen.areas:
             for region in area.regions:
                 if region.type == '':
-                    continue    # skip region which has no type
-                # TODO: region.id is not available in Blender 2.8
-                min1 = (region.x, region.y)
-                max1 = (region.x + region.width - 1,
-                        region.y + region.height - 1)
-                if intersect_aabb(min1, max1, (x, y),
-                                  (x + w - 1, y + h - 1)):
+                    continue    # Skip region with no type.
+                region_min = [region.x, region.y]
+                region_max = [region.x + region.width - 1,
+                              region.y + region.height - 1]
+                if intersect_aabb(region_min, region_max,
+                                  draw_area_min, draw_area_max):
                     regions.append((area, region))
+
         return regions
+
+# from here.
 
     @classmethod
     def draw_callback(cls, context):
-        # FIXME: 起動中にaddonを無効にした場合,get_instance()が例外を吐く
         prefs = compat.get_user_preferences(context).addons["screencastkeys"].preferences
 
         if context.window.as_pointer() != cls.origin['window']:
-            return
+            return      # Not match target window.
+
         rect = cls.calc_draw_area_rect(context)
         if not rect:
+            return      # No draw target.
+
+        # TODO:
+        #   x -> origin_x
+        #   y -> origin_y
+        #   xmin -> draw_area_min_x
+        #   rmin -> region_min_x
+
+        draw_area_min_x, draw_area_min_y, draw_area_max_x, draw_area_max_y = rect
+        _, _, _, origin_x, origin_y = cls.get_origin(context)
+        width = draw_area_max_x - origin_x
+        height = draw_area_max_y - origin_y
+        if width == height == 0:
             return
-        xmin, ymin, xmax, ymax = rect
-        win, _area, _region, x, y = cls.get_origin(context)
-        w = xmax - x
-        h = ymax - y
-        if w == h == 0:
-            return
+
         region = context.region
         area = context.area
         if region.type == 'WINDOW':
-            r_xmin, r_ymin, r_xmax, r_ymax = get_window_region_rect(area)
+            region_min_x, region_min_y, region_max_x, region_max_y = get_window_region_rect(area)
         else:
-            r_xmin, r_ymin, r_xmax, r_ymax = (
-                region.x,
-                region.y,
-                region.x + region.width - 1,
-                region.y + region.height - 1)
+            region_min_x = region.x
+            region_min_y = region.y
+            region_max_x = region.x + region.width - 1
+            region_max_y = region.y + region.height - 1
         if not intersect_aabb(
-                (r_xmin, r_ymin), (r_xmax, r_ymax),
-                (xmin + 1, ymin + 1), (xmax - 1, ymax - 1)):
+                [region_min_x, region_min_y], [region_max_x, region_max_y],
+                [draw_area_min_x + 1, draw_area_min_y + 1], [draw_area_max_x - 1, draw_area_max_x - 1]):
+            # We don't need to draw if draw area is not overlapped with region.
             return
+
+# from here
 
         current_time = time.time()
         draw_any = False
