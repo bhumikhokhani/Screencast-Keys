@@ -527,7 +527,41 @@ class ScreencastKeysStatus(bpy.types.Operator):
 
         return regions
 
-# from here.
+    @classmethod
+    def draw_text(cls, text, font_id, color, color_shadow):
+        # Draw shadow.
+        compat.set_blf_font_color(font_id, *color_shadow[:3], color_shadow[3] * 20)
+        compat.set_blf_blur(font_id, 5)
+        blf.draw(font_id, text)
+        compat.set_blf_blur(font_id, 0)
+
+        # Draw text.
+        compat.set_blf_font_color(font_id, *color, 1.0)
+        blf.draw(font_id, text)
+
+    @classmethod
+    def draw_line(cls, p1, p2, color, color_shadow):
+        bgl.glEnable(bgl.GL_BLEND)
+        bgl.glEnable(bgl.GL_LINE_SMOOTH)
+
+        # Draw shadow.
+        bgl.glLineWidth(3.0)
+        bgl.glColor4f(*color_shadow)
+        bgl.glBegin(bgl.GL_LINES)
+        bgl.glVertex2f(*p1)
+        bgl.glVertex2f(*p2)
+        bgl.glEnd()
+
+        # Draw line.
+        bgl.glLineWidth(1.0 if color_shadow[-1] == 0.0 else 1.5)
+        bgl.glColor3f(*color)
+        bgl.glBegin(bgl.GL_LINES)
+        bgl.glVertex2f(*p1)
+        bgl.glVertex2f(*p2)
+        bgl.glEnd()
+
+        bgl.glLineWidth(1.0)
+        bgl.glDisable(bgl.GL_LINE_SMOOTH)
 
     @classmethod
     def draw_callback(cls, context):
@@ -568,8 +602,6 @@ class ScreencastKeysStatus(bpy.types.Operator):
             # We don't need to draw if draw area is not overlapped with region.
             return
 
-# from here
-
         current_time = time.time()
         draw_any = False
 
@@ -578,48 +610,22 @@ class ScreencastKeysStatus(bpy.types.Operator):
         dpi = compat.get_user_preferences(context).system.dpi
         blf.size(font_id, font_size, dpi)
 
-        def draw_text(text):
-            col = prefs.color_shadow
-            compat.set_blf_font_color(font_id, *col[:3], col[3] * 20)
-            compat.set_blf_blur(font_id, 5)
-            blf.draw(font_id, text)
-            compat.set_blf_blur(font_id, 0)
-
-            compat.set_blf_font_color(font_id, *prefs.color, 1.0)
-            blf.draw(font_id, text)
-
-        def draw_line(p1, p2):
-            bgl.glEnable(bgl.GL_BLEND)
-            bgl.glEnable(bgl.GL_LINE_SMOOTH)
-
-            bgl.glLineWidth(3.0)
-            bgl.glColor4f(*prefs.color_shadow)
-            bgl.glBegin(bgl.GL_LINES)
-            bgl.glVertex2f(*p1)
-            bgl.glVertex2f(*p2)
-            bgl.glEnd()
-
-            bgl.glLineWidth(1.0 if prefs.color_shadow[-1] == 0.0 else 1.5)
-            bgl.glColor3f(*prefs.color)
-            bgl.glBegin(bgl.GL_LINES)
-            bgl.glVertex2f(*p1)
-            bgl.glVertex2f(*p2)
-            bgl.glEnd()
-
-            bgl.glLineWidth(1.0)
-            bgl.glDisable(bgl.GL_LINE_SMOOTH)
-
-        # user_preferences.system.use_region_overlapが真の場合に、
-        # 二重に描画されるのを防ぐ
-        glscissorbox = bgl.Buffer(bgl.GL_INT, 4)
-        bgl.glGetIntegerv(bgl.GL_SCISSOR_BOX, glscissorbox)
+        scissor_box = bgl.Buffer(bgl.GL_INT, 4)
+        bgl.glGetIntegerv(bgl.GL_SCISSOR_BOX, scissor_box)
+        # Clip 'TOOLS' and 'UI' region from 'WINDOW' region if need.
+        # This prevents from drawing multiple time when
+        # user_preferences.system.use_region_overlap is True.
         if context.area.type == 'VIEW_3D' and region.type == 'WINDOW':
-            xmin, ymin, xmax, ymax = get_region_rect_on_v3d(context)
-            bgl.glScissor(xmin, ymin, xmax - xmin + 1, ymax - ymin + 1)
+            x_min, y_min, x_max, y_max = get_region_rect_on_v3d(context)
+            bgl.glScissor(x_min, y_min, x_max - x_min + 1, y_max - y_min + 1)
 
+        # Get string height in draw area.
+        # TODO: th -> sh
         th = blf.dimensions(0, string.printable)[1]
-        px = x - region.x
-        py = y - region.y
+        px = origin_x - region.x
+        py = origin_y - region.y
+
+# from here
 
         operator_history = cls.removed_old_operator_history()
         if prefs.show_last_operator and operator_history:
@@ -632,10 +638,10 @@ class ScreencastKeysStatus(bpy.types.Operator):
                 text += " ('{}')".format(idname_py)
 
                 blf.position(font_id, px, py, 0)
-                draw_text(text)
+                cls.draw_text(text, font_id, prefs.color, prefs.color_shadow)
                 py += th + th * cls.SEPARATOR_HEIGHT * 0.2
                 tw = blf.dimensions(font_id, 'Left Mouse')[0]  # 適当
-                draw_line((px, py), (px + tw, py))
+                cls.draw_line([px, py], [px + tw, py], prefs.color, prefs.color_shadow))
                 py += th * cls.SEPARATOR_HEIGHT * 0.8
 
                 draw_any = True
@@ -659,7 +665,7 @@ class ScreencastKeysStatus(bpy.types.Operator):
             ofsy = -th * 0.0
             box_h = th + margin * 2
             blf.position(font_id, px, py + margin, 0)
-            draw_text(text)
+            cls.draw_text(text, font_id, prefs.color, prefs.color_shadow)
             w, h = blf.dimensions(font_id, text)
             draw_rounded_box(px - margin, py - margin + ofsy,
                              w + margin * 2, box_h, box_h * 0.2)
@@ -681,13 +687,13 @@ class ScreencastKeysStatus(bpy.types.Operator):
             if count > 1:
                 text += ' x' + str(count)
             blf.position(font_id, px, py, 0)
-            draw_text(text)
+            cls.draw_text(text, font_id, prefs.color, prefs.color_shadow)
 
             py += th
             draw_any = True
 
         bgl.glDisable(bgl.GL_BLEND)
-        bgl.glScissor(*glscissorbox)
+        bgl.glScissor(*scissor_box)
         bgl.glLineWidth(1.0)
 
         if draw_any:
